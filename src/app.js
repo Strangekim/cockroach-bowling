@@ -966,6 +966,54 @@ function flashTarget() { const orig = target.material.color.clone(); target.mate
 
 init();
 
+// Normalize any garbled Korean UI text at runtime (UTF-8)
+(function normalizeKoreanUI(){
+  try {
+    // Document title
+    if (typeof document !== 'undefined') {
+      document.title = '바퀴벌레 볼링';
+    }
+    // HUD status/hint
+    const status = document.getElementById('status');
+    if (status && /[�]/.test(status.textContent || '')) status.textContent = '로딩 중...';
+    const hint = document.getElementById('hint');
+    if (hint && /[�]/.test(hint.textContent || '')) hint.textContent = '화면을 끌어 조준, 손을 떼면 발사';
+    // Reset button label
+    const resetBtn = document.getElementById('resetPinsBtn');
+    if (resetBtn && /[�?]/.test((resetBtn.textContent||''))) resetBtn.textContent = '핀 리셋';
+  } catch (e) { /* no-op */ }
+})();
+
+// Patch dynamic UI (pause/gameover/scoreboard) texts when those elements appear
+(function observeAndFixDynamicText(){
+  if (typeof MutationObserver === 'undefined') return;
+  const fixNode = (node)=>{
+    if (!(node && node.nodeType === 1)) return;
+    // Pause overlay title/buttons
+    if (node.textContent && /[�]/.test(node.textContent)) {
+      node.textContent = node.textContent
+        .replace(/���� ����!/g, '일시 정지!')
+        .replace(/��� ����/g, '계속')
+        .replace(/�ٽ� ����/g, '다시 시작')
+        .replace(/������ /g, '프레임 ')
+        .replace(/�� ���� /g, ' · 투구 ')
+        .replace(/�� ���� /g, ' · 총점 ')
+        .replace(/����: /g, '총점: ')
+        .replace(/���� ����!/g, '게임 종료!');
+    }
+  };
+  const obs = new MutationObserver((muts)=>{
+    for (const m of muts) {
+      if (m.type === 'childList') {
+        m.addedNodes.forEach(fixNode);
+      } else if (m.type === 'characterData' && m.target && m.target.parentElement) {
+        fixNode(m.target.parentElement);
+      }
+    }
+  });
+  try { obs.observe(document.body, { childList: true, characterData: true, subtree: true }); } catch {}
+})();
+
 
 
 
