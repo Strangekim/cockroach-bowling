@@ -41,12 +41,17 @@ let groundMatWood = null, groundMatFlat = null;
 let foreMatWood = null, foreMatFlat = null;
 let paused = false; // pause flag
 let pauseOverlayEl = null; // pause overlay element
+let refreshWrap = null; // top-right refresh button wrapper
 const USE_WOOD = false; // 성능 최적화를 위해 기본적으로 우드 텍스처 비활성화
 // temp vectors to reduce GC
 const _tmpV1 = new THREE.Vector3();
 const _tmpV2 = new THREE.Vector3();
 const _tmpV3 = new THREE.Vector3();
 const _tmpV4 = new THREE.Vector3();
+
+// Angular dynamics for roach spin
+let roachAngVel = new THREE.Vector3(0, 0, 0);
+const ANGULAR_DAMP = 0.985;
 
 const g = 12;
 const ROACH_RADIUS = 0.30; // doubled roach size
@@ -153,7 +158,7 @@ function ensurePauseOverlay(){
       position:'fixed', inset:'0', display:'none', alignItems:'center', justifyContent:'center',
       background:'rgba(0,0,0,0.6)', color:'#fff', zIndex:9, flexDirection:'column', gap:'12px'
     });
-    const title = document.createElement('div'); title.textContent = '일시정지'; title.style.fontSize='28px'; title.style.fontWeight='800';
+    const title = document.createElement('div'); title.textContent = '게임 종료!'; title.style.fontSize='28px'; title.style.fontWeight='800';
     const row = document.createElement('div'); Object.assign(row.style,{ display:'flex', gap:'10px' });
     const btnCont = document.createElement('button'); btnCont.textContent = '계속 진행'; Object.assign(btnCont.style,{ padding:'10px 16px', borderRadius:'10px', border:'none', background:'#2d6cdf', color:'#fff', fontWeight:'800', cursor:'pointer' });
     const btnRestart = document.createElement('button'); btnRestart.textContent = '다시 시작'; Object.assign(btnRestart.style,{ padding:'10px 16px', borderRadius:'10px', border:'none', background:'#16a34a', color:'#fff', fontWeight:'800', cursor:'pointer' });
@@ -259,12 +264,12 @@ function showGameOver(){
     position:'fixed', inset:'0', display:'flex', alignItems:'center', justifyContent:'center',
     background:'rgba(0,0,0,0.6)', color:'#fff', zIndex:8, flexDirection:'column', gap:'12px'
   });
-  const title = document.createElement('div'); title.textContent = '\uAC8C\uC784 \uC885\uB8CC!'; title.style.fontSize='28px'; title.style.fontWeight='800';
+  const title = document.createElement('div'); title.textContent = '게임 종료!'; title.style.fontSize='28px'; title.style.fontWeight='800';
   const score = document.createElement('div'); score.textContent = '총점: ' + scoreState.total; score.style.fontSize='22px';
-  const btn = document.createElement('button'); btn.textContent = '새로고침'; Object.assign(btn.style, {
+  const btn = document.createElement('button'); btn.textContent = '\uC0C8\uB85C\uACE0\uCE68'; Object.assign(btn.style, {
     padding:'10px 16px', borderRadius:'10px', border:'none', background:'#2d6cdf', color:'#fff', fontWeight:'800', cursor:'pointer'
   });
-  btn.onclick = ()=>{ paused = true; ensurePauseOverlay(); };
+  btn.onclick = ()=>{ if (refreshWrap) refreshWrap.style.display=''; if (gameOverEl) { gameOverEl.remove(); gameOverEl = null; } paused = false; resetGame(); };
   gameOverEl.append(title, score, btn);
   document.body.appendChild(gameOverEl);
 }
@@ -281,6 +286,7 @@ function resetGame(){
   createRankingBillboard();
   updateScoreUI();
   resetRoach();
+  if (refreshWrap) refreshWrap.style.display='';
   setStatus('Ready: pull to launch');
 }
 
@@ -365,22 +371,25 @@ function init() {
     return tex;
   }
   // X2 signage attached to transparent side walls (large)
+    // X2 signage attached to transparent side walls (more visible)
   const x2tex = makeTextTexture('X2', { font: 'bold 200px Arial', color: '#ffffff', stroke: '#1a1a1a', strokeWidth: 12 });
   const plateGeo = new THREE.PlaneGeometry(4.0, 1.8);
-  const baseMat = new THREE.MeshBasicMaterial({ map: x2tex, transparent: false, depthTest: true, depthWrite: true, side: THREE.DoubleSide });
-  // Create labels per side: front/middle/back 횞 five vertical rows (from bottom to top)
-  const fracs = [-0.35, 0.0, 0.35];
-  const rows = 5;
+  const baseMat = new THREE.MeshBasicMaterial({ map: x2tex, transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide });
+  // 3 vertical rows × 5 positions along wall, both sides
+  const fracs = [-0.45, -0.225, 0.0, 0.225, 0.45];
+  const rows = 3;
   const yRows = Array.from({length: rows}, (_, i) => (-sideWallHeight * 0.5) + (i + 0.5) * (sideWallHeight / rows));
   plateLs = []; plateRs = [];
-  {
-    const mL = baseMat.clone(); const mR = baseMat.clone();
-    const pL = new THREE.Mesh(plateGeo, mL);
-    pL.position.set(0, sideWallHeight * 0.5 - 0.9, 0.06);
-    pL.renderOrder = 2; sideWallL.add(pL); plateLs.push(pL);
-    const pR = new THREE.Mesh(plateGeo, mR);
-    pR.position.set(0, sideWallHeight * 0.5 - 0.9, 0.06);
-    pR.renderOrder = 2; sideWallR.add(pR); plateRs.push(pR);
+  for (const f of fracs) {
+    for (const y of yRows) {
+      const mL = baseMat.clone(); const mR = baseMat.clone();
+      const pL = new THREE.Mesh(plateGeo, mL);
+      pL.position.set(f * wallLen, y, 0.06);
+      pL.renderOrder = 2; sideWallL.add(pL); plateLs.push(pL);
+      const pR = new THREE.Mesh(plateGeo, mR);
+      pR.position.set(-f * wallLen, y, 0.06);
+      pR.renderOrder = 2; sideWallR.add(pR); plateRs.push(pR);
+    }
   }
   // Edge guides (thin bright rails at collision boundaries)
   const railGeo = new THREE.BoxGeometry(0.02, 0.02, LANE_LENGTH);
@@ -522,14 +531,16 @@ function init() {
   setupInput();
   // Hide legacy HUD texts on the top-left and add refresh menu
   const hud = document.getElementById('hud'); if (hud) hud.style.display = 'none';
-  (function createRefreshMenuUI(){
+    (function createRefreshMenuUI(){
     const wrap = document.createElement('div');
     Object.assign(wrap.style, { position:'fixed', top:'8px', right:'8px', zIndex:7 });
-    const btn = document.createElement('button'); btn.textContent = '새로고침';
+    const btn = document.createElement('button');
+    btn.textContent = '\uC0C8\uB85C\uACE0\uCE68';
     Object.assign(btn.style, { padding:'8px 12px', border:'none', borderRadius:'10px', background:'#2d6cdf', color:'#fff', fontWeight:'800', cursor:'pointer' });
-    
     btn.onclick = ()=>{ paused = true; ensurePauseOverlay(); };
-    wrap.appendChild(btn); document.body.appendChild(wrap);
+    wrap.appendChild(btn);
+    document.body.appendChild(wrap);
+    refreshWrap = wrap;
   })();
   window.addEventListener('resize', resize); resize();
   setStatus('Ready: pull to launch');
@@ -589,6 +600,16 @@ function shootFromDrag(start, end) {
   // Reset wall UI multipliers back to X2 for new throw
   updateWallMultiplierAll();
   roachVel.copy(dir).multiplyScalar(speed); roachActive = true;
+  // Apply initial spin based on drag direction/length
+  roach.rotation.order = 'YXZ';
+  const side = THREE.MathUtils.clamp(-(pullX) / maxLen, -1, 1);
+  const up = THREE.MathUtils.clamp(-(pullY) / maxLen, -1, 1);
+  // Tune these multipliers to taste
+  roachAngVel.set(
+    up * 1.2,   // pitch spin
+    side * 2.0, // yaw spin
+    side * 1.5  // roll spin
+  );
   const lookAt = new THREE.Vector3().copy(roach.position).add(roachVel); roach.lookAt(lookAt);
   setStatus('Ready: pull to launch');
 }
@@ -628,13 +649,21 @@ function loop(t) {
   if (roachActive) {
     // Integrate motion
     roachVel.y -= g * dt; roach.position.addScaledVector(roachVel, dt);
-    // More realistic attitude: pitch by arc, roll by lateral velocity
+    // Integrate angular velocity for free spin
+    roach.rotation.x += roachAngVel.x * dt;
+    roach.rotation.y += roachAngVel.y * dt;
+    roach.rotation.z += roachAngVel.z * dt;
+    roachAngVel.multiplyScalar(ANGULAR_DAMP);
+    // Gentle alignment to velocity: pitch/roll only (weakened)
     const speedXZ = Math.hypot(roachVel.x, roachVel.z);
     const targetPitch = -Math.atan2(roachVel.y, Math.max(0.1, speedXZ));
     const targetRoll  = THREE.MathUtils.clamp(-roachVel.x * 0.12, -0.6, 0.6);
     const lerpAng = (a,b,t)=>a+(b-a)*t;
-    roach.rotation.x = lerpAng(roach.rotation.x, targetPitch, 0.12);
-    roach.rotation.z = lerpAng(roach.rotation.z, targetRoll, 0.12);
+    roach.rotation.x = lerpAng(roach.rotation.x, targetPitch, 0.06);
+    roach.rotation.z = lerpAng(roach.rotation.z, targetRoll, 0.05);
+    // Very light yaw alignment so heading roughly follows velocity
+    const desiredYaw = Math.atan2(roachVel.x, -roachVel.z);
+    roach.rotation.y = lerpAng(roach.rotation.y, desiredYaw, 0.02);
     // Animate antennae and legs with aggressive, speed-scaled motion
     if (roach.userData && roach.userData.parts) {
       const parts = roach.userData.parts;
@@ -663,9 +692,14 @@ function loop(t) {
     // Bowling: walls and pin collisions
     if (roach.position.x < -LANE_HALF + ROACH_RADIUS) {
       roach.position.x = -LANE_HALF + ROACH_RADIUS; roachVel.x *= -0.85; scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
+      // add torque on wall hit for more spin feel
+      roachAngVel.y += 1.2 * Math.sign(roachVel.x);
+      roachAngVel.z += 0.6 * Math.sign(roachVel.x);
     }
     if (roach.position.x >  LANE_HALF - ROACH_RADIUS) {
       roach.position.x =  LANE_HALF - ROACH_RADIUS; roachVel.x *= -0.85; scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
+      roachAngVel.y += 1.2 * Math.sign(roachVel.x);
+      roachAngVel.z += 0.6 * Math.sign(roachVel.x);
     }
     for (const p of pins) {
       const dx = roach.position.x - p.position.x;
@@ -904,6 +938,7 @@ function finalizeThrow(){
 function flashTarget() { const orig = target.material.color.clone(); target.material.color.set(0xffe370); setTimeout(() => target.material.color.copy(orig), 150); }
 
 init();
+
 
 
 
