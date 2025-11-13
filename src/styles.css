@@ -1,0 +1,61 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #cfe9b1; /* light grass fallback if WebGL fails */
+  color: #f4f6f8;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple SD Gothic Neo, Noto Sans KR, "Malgun Gothic", sans-serif;
+  overscroll-behavior: none;
+}
+
+#hud {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  z-index: 5;
+  pointer-events: none;
+}
+
+#status {
+  display: inline-block;
+  align-self: flex-start;
+  background: rgba(0,0,0,0.45);
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#hint {
+  display: inline-block;
+  align-self: flex-start;
+  background: rgba(255,255,255,0.08);
+  padding: 0.4rem 0.6rem;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+canvas#aim {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none; /* allow custom gestures */
+  z-index: 2; /* sits above WebGL canvas to draw aim */
+  pointer-events: none; /* drawing only; events handled on WebGL canvas */
+}
+
+/* The Three.js renderer canvas will be appended to body; make it fullscreen */
+canvas.webgl {
+  position: fixed;
+  inset: 0;
+  width: 100vw !important;
+  height: 100vh !important;
+  touch-action: none;
+  z-index: 1;
+  display: block;
+}
