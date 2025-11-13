@@ -52,6 +52,9 @@ const _tmpV4 = new THREE.Vector3();
 // Angular dynamics for roach spin
 let roachAngVel = new THREE.Vector3(0, 0, 0);
 const ANGULAR_DAMP = 0.985;
+// Camera shake (on impacts)
+let camShakeT = 0; // remaining time (s)
+let camShakeAmp = 0; // base amplitude
 
 const g = 12;
 const ROACH_RADIUS = 0.30; // doubled roach size
@@ -178,7 +181,7 @@ function createScoreUI(){
     background: 'rgba(0,0,0,0.45)', color: '#fff', padding: '6px 10px', borderRadius: '10px',
     fontWeight: '700', fontSize: '14px', zIndex: 6
   });
-  scoreboardEl.textContent = 'Frame 1/3 쨌 Throw 1/2 쨌 Total 0';
+  scoreboardEl.textContent = '프레임 1/3 · 투구 1/2 · 총점 0';
   document.body.appendChild(scoreboardEl);
 
   // Bowling-like frame table
@@ -205,15 +208,15 @@ function createScoreUI(){
 
 function updateScoreUI(){
   if (scoreboardEl){
-  const f = scoreState.frame; const t = scoreState.throwInFrame; const tot = scoreState.total;
-  scoreboardEl.textContent = `Frame ${f}/3 쨌 Throw ${t}/2 쨌 Total ${tot}`;
+  const f = Math.min(scoreState.frame, 3); const t = Math.min(scoreState.throwInFrame, 2); const tot = scoreState.total;
+  scoreboardEl.textContent = `프레임 ${f}/3 · 투구 ${t}/2 · 총점 ${tot}`;
   }
   // update table
   for (let i=0;i<3;i++){
     const cell = scoreCells[i]; if (!cell) continue; const fr = scoreState.frames[i];
-    cell.t1.textContent = fr && fr.throws[0] ? String(fr.throws[0]) : '';
-    cell.t2.textContent = fr && fr.throws[1] ? String(fr.throws[1]) : '';
-    cell.total.textContent = fr && fr.score ? String(fr.score) : '';
+    cell.t1.textContent = (function(){ const played = (i < scoreState.frame - 1) || (i === scoreState.frame - 1 && scoreState.throwInFrame > 1) || scoreState.gameOver; return played ? String(fr && typeof fr.throws[0] === 'number' ? fr.throws[0] : 0) : ''; })();
+    cell.t2.textContent = (function(){ const played = (i < scoreState.frame - 1) || (i === scoreState.frame - 1 && scoreState.throwInFrame > 2) || scoreState.gameOver; return played ? String(fr && typeof fr.throws[1] === 'number' ? fr.throws[1] : 0) : ''; })();
+    cell.total.textContent = (((i < scoreState.frame - 1) || scoreState.gameOver) && fr) ? String(fr.score || 0) : '';
     // highlight current frame
     const isCurrent = (i === scoreState.frame - 1 && !scoreState.gameOver);
     cell.frame.style.outline = isCurrent ? '2px solid #82d14a' : 'none';
@@ -692,14 +695,18 @@ function loop(t) {
     // Bowling: walls and pin collisions
     if (roach.position.x < -LANE_HALF + ROACH_RADIUS) {
       roach.position.x = -LANE_HALF + ROACH_RADIUS; roachVel.x *= -0.85; scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
-      // add torque on wall hit for more spin feel
-      roachAngVel.y += 1.2 * Math.sign(roachVel.x);
-      roachAngVel.z += 0.6 * Math.sign(roachVel.x);
+      // add torque + camera shake on wall hit for more spin feel
+      roachAngVel.y += 1.5 * Math.sign(roachVel.x);
+      roachAngVel.z += 0.8 * Math.sign(roachVel.x);
+      camShakeT = Math.max(camShakeT, 0.12);
+      camShakeAmp = Math.min(0.12, 0.02 + Math.abs(roachVel.x) * 0.01);
     }
     if (roach.position.x >  LANE_HALF - ROACH_RADIUS) {
       roach.position.x =  LANE_HALF - ROACH_RADIUS; roachVel.x *= -0.85; scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
-      roachAngVel.y += 1.2 * Math.sign(roachVel.x);
-      roachAngVel.z += 0.6 * Math.sign(roachVel.x);
+      roachAngVel.y += 1.5 * Math.sign(roachVel.x);
+      roachAngVel.z += 0.8 * Math.sign(roachVel.x);
+      camShakeT = Math.max(camShakeT, 0.12);
+      camShakeAmp = Math.min(0.12, 0.02 + Math.abs(roachVel.x) * 0.01);
     }
     for (const p of pins) {
       const dx = roach.position.x - p.position.x;
@@ -707,7 +714,8 @@ function loop(t) {
       const dist2 = dx*dx + dz*dz;
       const pr = PIN_RADIUS + ROACH_RADIUS;
       const nearXZ = dist2 < pr*pr;
-      const nearY = roach.position.y <= 0.45; // ignore overhead passes
+      // Allow slightly higher belly contacts to count
+      const nearY = roach.position.y <= 0.85; // allow higher belly contacts
       if (nearXZ && nearY) {
         // Tip the pin with direction based on impact vector (more natural)
         if (p.userData.alive) {
@@ -721,7 +729,10 @@ function loop(t) {
           // map impact direction to target tip angles on both x and z
           const tx = THREE.MathUtils.clamp(-inz * max + jitter, -max, max);
           const tz = THREE.MathUtils.clamp( inx * max + jitter, -max, max);
-          p.userData.tip = { tx, tz, max, speed: 2.0 };
+          // Belly hits (higher Y) tip a bit faster
+          const bellyFactor = THREE.MathUtils.clamp((roach.position.y - 0.25) / 0.5, 0, 1);
+          const tipSpeed = 2.2 + 1.3 * bellyFactor;
+          p.userData.tip = { tx, tz, max, speed: tipSpeed };
           p.userData.knockedThrowId = scoreState.currentThrowId;
         }
         // Resolve penetration: push roach out and reflect velocity
@@ -735,24 +746,60 @@ function loop(t) {
         roachVel.x = roachVel.x - (1+e)*vdotn*nx;
         roachVel.z = roachVel.z - (1+e)*vdotn*nz;
         // Transfer momentum to pin (use tuned masses)
-        const impulseFactor = 0.7; // base transfer factor
-        p.userData.vel.x += -nx * vdotn * impulseFactor * (ROACH_MASS / PIN_MASS);
-        p.userData.vel.z += -nz * vdotn * impulseFactor * (ROACH_MASS / PIN_MASS);
+        const bellyFactor2 = THREE.MathUtils.clamp((roach.position.y - 0.25) / 0.5, 0, 1);
+        const impulseFactor = 0.8 + 0.7 * bellyFactor2; // stronger when hitting a bit higher
+        const massRatio = (ROACH_MASS / PIN_MASS);
+        p.userData.vel.x += -nx * vdotn * impulseFactor * massRatio;
+        p.userData.vel.z += -nz * vdotn * impulseFactor * massRatio;
+        // Add a bit of tangential shove to encourage tipping
+        const vtx = roachVel.x - vdotn * nx;
+        const vtz = roachVel.z - vdotn * nz;
+        const tangentialKick = 0.28 * bellyFactor2 * massRatio;
+        // camera shake intensity based on impact strength
+        camShakeT = Math.max(camShakeT, 0.15);
+        camShakeAmp = Math.min(0.14, 0.02 + Math.abs(vdotn) * 0.02);
+        p.userData.vel.x += -vtx * tangentialKick;
+        p.userData.vel.z += -vtz * tangentialKick;
       }
     }
     // (moved) Pin-pin collisions handled below every frame for continuous interaction
     const minY = ROACH_RADIUS + 0.02; if (roach.position.y <= minY) { roach.position.y = minY; roachActive = false; setStatus('Ready: pull to launch'); }
     const d = roach.position.distanceTo(target.position); if (d < TARGET_RADIUS + ROACH_RADIUS * 0.75) { flashTarget(); randomizeTarget(); resetRoach(); setStatus('Ready: pull to launch'); }
   }
-  if (!roachActive && prevActive && !resetTimer) {
-    pendingFinalize = true;
-    resetTimer = setTimeout(() => { 
-      if (pendingFinalize) { finalizeThrow(); pendingFinalize = false; }
-      if (pendingPinsReset) { placePins(); pendingPinsReset = false; }
-      resetRoach(); 
-      resetTimer = null; 
-    }, 1500);
+  // Apply camera shake to camera target/position
+  const camTarget = _tmpV1; const camPos = _tmpV2;
+  if (roachActive) { const v = _tmpV3.copy(roachVel); if (v.lengthSq() < 0.001) v.set(0, 0, -1); v.normalize(); const behind = _tmpV4.copy(v).multiplyScalar(-4.5); behind.y += 2.0; camPos.copy(roach.position).add(behind); camTarget.copy(roach.position).addScaledVector(v, 1.5); }
+  else {
+    if (roach.userData && roach.userData.parts) {
+      const parts = roach.userData.parts;
+      const tt = performance.now() * 0.008;
+      const ft = performance.now() * 0.040;
+      for (let i=0;i<parts.antennae.length;i++) {
+        const a = parts.antennae[i];
+        a.rotation.x = -0.6 + Math.sin(tt*1.1 + i*0.8)*0.18 + Math.sin(ft*6.0 + i)*0.08;
+        a.rotation.y = Math.sin(tt*0.9 + i)*0.18;
+      }
+      for (let i=0;i<parts.legs.length;i++) {
+        const l = parts.legs[i];
+        const ph = (i%2===0?0.0:0.6) + i*0.15;
+        const side = (l.position.x < 0) ? -1 : 1;
+        l.rotation.x = 0.55 + Math.sin(tt*1.8 + ph)*0.22;
+        l.rotation.y = Math.cos(tt*1.4 + ph)*0.10;
+        l.rotation.z = side * Math.sin(tt*2.0 + ph)*0.12;
+      }
+    }
+    const toT = _tmpV3.copy(pinAimPoint).sub(roach.position); toT.y = 0; if (toT.lengthSq() < 1e-4) toT.set(0,0,-1); toT.normalize(); const back = _tmpV4.copy(toT).multiplyScalar(-4.2); camPos.copy(roach.position).add(back); camPos.y = Math.max(roach.position.y + 1.8, 2.0); camTarget.copy(roach.position).addScaledVector(toT, 2.0); camTarget.y = Math.min(roach.position.y + 0.9, camPos.y - 0.8);
   }
+  if (camShakeT > 0) {
+    const s = camShakeAmp * (camShakeT / 0.15);
+    const tt = t * 0.06;
+    camPos.x += (Math.sin(tt*850.0) + Math.cos(tt*1130.0)) * 0.5 * s;
+    camPos.y += Math.sin(tt*960.0) * 0.3 * s;
+    camTarget.x += Math.sin(tt*720.0) * 0.3 * s;
+    camShakeT = Math.max(0, camShakeT - dt);
+    camShakeAmp *= 0.92;
+  }
+  // (moved) finalize and render happen after pin-pin and pin updates below
   // Pin-pin collisions: broadphase grid for performance + low iteration
   const CELL = 0.6;
   for (let it=0; it<1; it++) {
@@ -799,7 +846,7 @@ function loop(t) {
                 b.userData.vel.z += (jimp * nz) / m2;
                 // tipping: impact strong enough knocks one or both down
                 const impactSpeed = -relVelDotN;
-                const TIP_THRESHOLD = 0.65;
+                const TIP_THRESHOLD = 0.55;
                 if (impactSpeed > TIP_THRESHOLD){
                   const max = 1.35; const jitter = 0.25 * (Math.random()-0.5);
                   if (a.userData.alive) {
@@ -875,42 +922,22 @@ function loop(t) {
       p.position.y = 0; // keep on floor; no sinking
     }
   }
-  const camTarget = _tmpV1; const camPos = _tmpV2;
-  if (roachActive) { const v = _tmpV3.copy(roachVel); if (v.lengthSq() < 0.001) v.set(0, 0, -1); v.normalize(); const behind = _tmpV4.copy(v).multiplyScalar(-4.5); behind.y += 2.0; camPos.copy(roach.position).add(behind); camTarget.copy(roach.position).addScaledVector(v, 1.5); }
-  else {
-    // Idle: keep slight lively motion even when not flying
-    if (roach.userData && roach.userData.parts) {
-      const parts = roach.userData.parts;
-      const tt = performance.now() * 0.008;
-      const ft = performance.now() * 0.040;
-      for (let i=0;i<parts.antennae.length;i++) {
-        const a = parts.antennae[i];
-        a.rotation.x = -0.6 + Math.sin(tt*1.1 + i*0.8)*0.18 + Math.sin(ft*6.0 + i)*0.08;
-        a.rotation.y = Math.sin(tt*0.9 + i)*0.18;
-      }
-      for (let i=0;i<parts.legs.length;i++) {
-        const l = parts.legs[i];
-        const ph = (i%2===0?0.0:0.6) + i*0.15;
-        const side = (l.position.x < 0) ? -1 : 1;
-        l.rotation.x = 0.55 + Math.sin(tt*1.8 + ph)*0.22;
-        l.rotation.y = Math.cos(tt*1.4 + ph)*0.10;
-        l.rotation.z = side * Math.sin(tt*2.0 + ph)*0.12;
-      }
-    }
-    // Golf-like idle: slightly top-down from behind roach toward target
-    const toT = _tmpV3.copy(pinAimPoint).sub(roach.position); toT.y = 0;
-    if (toT.lengthSq() < 1e-4) toT.set(0, 0, -1);
-    toT.normalize();
-    const back = _tmpV4.copy(toT).multiplyScalar(-4.2);
-    camPos.copy(roach.position).add(back);
-    camPos.y = Math.max(roach.position.y + 1.8, 2.0);
-    camTarget.copy(roach.position).addScaledVector(toT, 2.0);
-    camTarget.y = Math.min(roach.position.y + 0.9, camPos.y - 0.8);
+  // Now that physics settled, finalize throw if we just stopped
+  if (!roachActive && prevActive && !resetTimer) {
+    pendingFinalize = true;
+    resetTimer = setTimeout(() => { 
+      if (pendingFinalize) { finalizeThrow(); pendingFinalize = false; }
+      if (pendingPinsReset) { placePins(); pendingPinsReset = false; }
+      resetRoach(); 
+      resetTimer = null; 
+    }, 1500);
   }
+  // Finish camera update, render and schedule next frame
   if (camPos.y < camTarget.y + 0.6) camPos.y = camTarget.y + 0.6;
   camera.position.lerp(camPos, 0.12); camera.lookAt(camTarget);
+  renderer.render(scene, camera);
   prevActive = roachActive;
-  renderer.render(scene, camera); requestAnimationFrame(loop);
+  requestAnimationFrame(loop);
 }
 
 function finalizeThrow(){
@@ -938,6 +965,9 @@ function finalizeThrow(){
 function flashTarget() { const orig = target.material.color.clone(); target.material.color.set(0xffe370); setTimeout(() => target.material.color.copy(orig), 150); }
 
 init();
+
+
+
 
 
 
