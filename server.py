@@ -6,7 +6,11 @@ PORT = 8080
 class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):
     def guess_type(self, path):
         if path.endswith('.js'):
-            return 'application/javascript'
+            return 'application/javascript; charset=utf-8'
+        if path.endswith('.html'):
+            return 'text/html; charset=utf-8'
+        if path.endswith('.css'):
+            return 'text/css; charset=utf-8'
         return super().guess_type(path)
 
     def end_headers(self):

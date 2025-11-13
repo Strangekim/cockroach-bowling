@@ -1,22 +1,22 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>Cockroach Throwing — MVP</title>
+    <title>바퀴볼링</title>
     <link rel="stylesheet" href="src/styles.css" />
   </head>
   <body>
     <div id="hud">
       <div id="status">로딩 중...</div>
-      <div id="hint">좌우로 살짝 당겨 방향, 길게 당겨 파워</div>
+      <div id="hint">좌우로 당겨 방향, 길게 당겨 파워</div>
     </div>
     <canvas id="aim"></canvas>
-    <script src="src/vendor/three.min.js"></script>
+    <!-- removed three.min.js -->
     <script>
       if (window.THREE && !window.__THREE) window.__THREE = window.THREE;
     </script>
-    <button id="resetPinsBtn" style="position:fixed; right:12px; top:12px; z-index:6; padding:8px 12px; border-radius:10px; border:none; background:#2d6cdf; color:#fff; font-weight:700;">핀 리셋</button>
+    <button id="resetPinsBtn" style="position:fixed; right:12px; top:12px; z-index:6; padding:8px 12px; border-radius:10px; border:none; background:#2d6cdf; color:#fff; font-weight:700;">? 由ъ뀑</button>
     <script type="module" src="src/app.js"></script>
   </body>
 </html>

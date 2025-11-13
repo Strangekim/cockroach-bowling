@@ -59,3 +59,6 @@ canvas.webgl {
   z-index: 1;
   display: block;
 }
+
+/* Hide legacy hint/status HUD text in the top-left */
+#hud { display: none !important; }

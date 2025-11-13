@@ -1,4 +1,4 @@
-// Cockroach Throwing — MVP (3D, third-person, mobile flick)
+﻿// Cockroach Throwing ??MVP (3D, third-person, mobile flick)
 import * as THREE from './vendor/three.module.js';
 
 let scene, camera, renderer;
@@ -33,6 +33,15 @@ let pendingPinsReset = false;
 let sideWallL = null, sideWallR = null;
 let sideWallMatL = null, sideWallMatR = null;
 let plateLs = [], plateRs = [];
+let wallRainbow = false; // rainbow effect flag when X >= 1024
+let rankingBoard = null; // 3D billboard mesh
+// Lane floor refs for LOD switching
+let ground = null, fore = null;
+let groundMatWood = null, groundMatFlat = null;
+let foreMatWood = null, foreMatFlat = null;
+let paused = false; // pause flag
+let pauseOverlayEl = null; // pause overlay element
+const USE_WOOD = false; // 성능 최적화를 위해 기본적으로 우드 텍스처 비활성화
 // temp vectors to reduce GC
 const _tmpV1 = new THREE.Vector3();
 const _tmpV2 = new THREE.Vector3();
@@ -83,6 +92,78 @@ function makeTextTexture(text, {font='bold 64px sans-serif', color='#ffffff', st
   return tex;
 }
 
+// Lightweight procedural wood texture for the lane
+function makeWoodTexture({width=256, height=256, base='#d9b77a', stripe='#caa261', grain=18}={}){
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = base; ctx.fillRect(0,0,width,height);
+  const boardW = Math.max(6, Math.floor(width / grain));
+  for (let x=0; x<width; x+=boardW){
+    ctx.fillStyle = ((x/boardW)|0) % 2 === 0 ? base : stripe;
+    ctx.fillRect(x, 0, boardW, height);
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.05)';
+  for (let x=0; x<width; x+=boardW){ ctx.fillRect(x, 0, 1, height); }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 1;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function createRankingBillboard(){
+  if (rankingBoard) return rankingBoard;
+  const bw = Math.max(1.0, LANE_WIDTH - 0.6);
+  const bh = 2.0;
+  const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0f172a'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 12; ctx.strokeRect(6,6,canvas.width-12,canvas.height-12);
+  ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 72px system-ui, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
+  ctx.fillText('\uC804\uCCB4 \uB7AD\uD0B9', canvas.width/2, 28);
+  const rows = [
+    { rank: '1\uB4F1', name: 'yhk', score: '15000' },
+    { rank: '2\uB4F1', name: 'yhk', score: '10000' },
+    { rank: '3\uB4F1', name: 'yhk', score: '5000' },
+  ];
+  ctx.font = 'bold 56px system-ui, sans-serif';
+  const startY = 140; const stepY = 110;
+  rows.forEach((r,i)=>{
+    const y = startY + i*stepY;
+    ctx.fillStyle = '#93c5fd'; ctx.textAlign='left'; ctx.fillText(r.rank, 140, y);
+    ctx.fillStyle = '#e5e7eb'; ctx.fillText(r.name, 300, y);
+    ctx.fillStyle = '#fbbf24'; ctx.textAlign='right'; ctx.fillText(r.score, canvas.width-140, y);
+  });
+  const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace; tex.needsUpdate = true; tex.minFilter = THREE.LinearFilter;
+  const geo = new THREE.PlaneGeometry(bw, bh);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+  const board = new THREE.Mesh(geo, mat);
+  board.position.set(0, 5.0, -LANE_LENGTH + 1.0);
+  scene.add(board);
+  rankingBoard = board;
+  return board;
+}
+
+function ensurePauseOverlay(){
+  if (!pauseOverlayEl){
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+      position:'fixed', inset:'0', display:'none', alignItems:'center', justifyContent:'center',
+      background:'rgba(0,0,0,0.6)', color:'#fff', zIndex:9, flexDirection:'column', gap:'12px'
+    });
+    const title = document.createElement('div'); title.textContent = '일시정지'; title.style.fontSize='28px'; title.style.fontWeight='800';
+    const row = document.createElement('div'); Object.assign(row.style,{ display:'flex', gap:'10px' });
+    const btnCont = document.createElement('button'); btnCont.textContent = '계속 진행'; Object.assign(btnCont.style,{ padding:'10px 16px', borderRadius:'10px', border:'none', background:'#2d6cdf', color:'#fff', fontWeight:'800', cursor:'pointer' });
+    const btnRestart = document.createElement('button'); btnRestart.textContent = '다시 시작'; Object.assign(btnRestart.style,{ padding:'10px 16px', borderRadius:'10px', border:'none', background:'#16a34a', color:'#fff', fontWeight:'800', cursor:'pointer' });
+    btnCont.onclick = ()=>{ paused = false; el.style.display='none'; };
+    btnRestart.onclick = ()=>{ paused = false; el.style.display='none'; resetGame(); };
+    row.append(btnCont, btnRestart); el.append(title, row); document.body.appendChild(el);
+    pauseOverlayEl = el;
+  }
+  pauseOverlayEl.style.display = 'flex';
+}
 function createScoreUI(){
   // Compact summary bar
   scoreboardEl = document.createElement('div');
@@ -92,7 +173,7 @@ function createScoreUI(){
     background: 'rgba(0,0,0,0.45)', color: '#fff', padding: '6px 10px', borderRadius: '10px',
     fontWeight: '700', fontSize: '14px', zIndex: 6
   });
-  scoreboardEl.textContent = 'Frame 1/3 · Throw 1/2 · Total 0';
+  scoreboardEl.textContent = 'Frame 1/3 쨌 Throw 1/2 쨌 Total 0';
   document.body.appendChild(scoreboardEl);
 
   // Bowling-like frame table
@@ -120,7 +201,7 @@ function createScoreUI(){
 function updateScoreUI(){
   if (scoreboardEl){
   const f = scoreState.frame; const t = scoreState.throwInFrame; const tot = scoreState.total;
-  scoreboardEl.textContent = `Frame ${f}/3 · Throw ${t}/2 · Total ${tot}`;
+  scoreboardEl.textContent = `Frame ${f}/3 쨌 Throw ${t}/2 쨌 Total ${tot}`;
   }
   // update table
   for (let i=0;i<3;i++){
@@ -159,8 +240,15 @@ function updateWallMultiplierAll(){
   if (plateLs && plateLs.length) { for (const p of plateLs) { p.material.map = tex; p.material.needsUpdate = true; } }
   if (plateRs && plateRs.length) { for (const p of plateRs) { p.material.map = tex; p.material.needsUpdate = true; } }
   const color = labelColorForExp(exp);
-  if (sideWallMatL) sideWallMatL.color.setHex(color);
-  if (sideWallMatR) sideWallMatR.color.setHex(color);
+  const pow2 = Math.pow(2, exp);
+  wallRainbow = pow2 >= 1024;
+  if (!wallRainbow) {
+    if (sideWallMatL) sideWallMatL.color.setHex(color);
+    if (sideWallMatR) sideWallMatR.color.setHex(color);
+    // reset label tint/opacity to default when leaving rainbow mode
+    for (const p of plateLs) { if (p.material && p.material.color) { p.material.color.setHex(0xffffff); p.material.opacity = 1.0; } }
+    for (const p of plateRs) { if (p.material && p.material.color) { p.material.color.setHex(0xffffff); p.material.opacity = 1.0; } }
+  }
 }
 
 function showGameOver(){
@@ -171,25 +259,29 @@ function showGameOver(){
     position:'fixed', inset:'0', display:'flex', alignItems:'center', justifyContent:'center',
     background:'rgba(0,0,0,0.6)', color:'#fff', zIndex:8, flexDirection:'column', gap:'12px'
   });
-  const title = document.createElement('div'); title.textContent = '🎉 게임 종료!'; title.style.fontSize='28px'; title.style.fontWeight='800';
-  const score = document.createElement('div'); score.textContent = `총점: ${scoreState.total}`; score.style.fontSize='22px';
-  const btn = document.createElement('button'); btn.textContent = '다시하기'; Object.assign(btn.style, {
+  const title = document.createElement('div'); title.textContent = '\uAC8C\uC784 \uC885\uB8CC!'; title.style.fontSize='28px'; title.style.fontWeight='800';
+  const score = document.createElement('div'); score.textContent = '총점: ' + scoreState.total; score.style.fontSize='22px';
+  const btn = document.createElement('button'); btn.textContent = '새로고침'; Object.assign(btn.style, {
     padding:'10px 16px', borderRadius:'10px', border:'none', background:'#2d6cdf', color:'#fff', fontWeight:'800', cursor:'pointer'
   });
-  btn.onclick = ()=>{ resetGame(); };
+  btn.onclick = ()=>{ paused = true; ensurePauseOverlay(); };
   gameOverEl.append(title, score, btn);
   document.body.appendChild(gameOverEl);
 }
-
 function resetGame(){
   scoreState.frame = 1; scoreState.throwInFrame = 1; scoreState.total = 0; scoreState.currentThrowId = 0; scoreState.wallHitsThisThrow = 0; scoreState.gameOver = false;
   scoreState.frames = Array.from({length:3}, ()=>({ throws:[0,0], pins:[0,0], wallHits:[0,0], score:0 }));
   if (gameOverEl) { gameOverEl.remove(); gameOverEl = null; }
   updateScoreUI();
   placePins();
+  // Ensure the ranking billboard is visible from the very start
+  createRankingBillboard();
+  if (rankingBoard) { scene.remove(rankingBoard); rankingBoard = null; }
+  // 3D ranking billboard behind the pins, within side walls
+  createRankingBillboard();
   updateScoreUI();
   resetRoach();
-  setStatus('다시 당겨 발사');
+  setStatus('Ready: pull to launch');
 }
 
  
@@ -197,7 +289,8 @@ function resetGame(){
 function init() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xcfe9b1);
-  scene.fog = new THREE.Fog(0xcfe9b1, 20, 80);
+  // 성능 최적화를 위해 Fog 비활성화
+  scene.fog = null;
 
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
   camera.position.set(0, 2.2, 6.5);
@@ -216,10 +309,28 @@ function init() {
   scene.add(dir);
 
   const groundGeo = new THREE.PlaneGeometry(LANE_WIDTH, LANE_LENGTH);
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0xd9c8a1, metalness: 0.0, roughness: 0.9 });
-  const ground = new THREE.Mesh(groundGeo, groundMat);
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; ground.position.z = -LANE_LENGTH * 0.5;
-  scene.add(ground); ground.visible = false; // hide brown lane for cleaner visuals and performance
+  const woodTex = makeWoodTexture({ width: 256, height: 256, base: '#d9b77a', stripe: '#caa261', grain: 18 });
+  woodTex.repeat.set(Math.max(1, Math.floor(LANE_WIDTH*0.8)), Math.max(2, Math.floor(LANE_LENGTH/6)));
+  groundMatWood = new THREE.MeshBasicMaterial({ map: woodTex });
+  groundMatFlat = new THREE.MeshBasicMaterial({ color: 0xd9c8a1 });
+  ground = new THREE.Mesh(groundGeo, USE_WOOD ? groundMatWood : groundMatFlat);
+  ground.rotation.x = -Math.PI / 2; ground.position.z = -LANE_LENGTH * 0.5;
+  scene.add(ground);
+  // Extend wooden floor forward (toward camera) so green background is hidden near start
+  const foreGeo = new THREE.PlaneGeometry(LANE_WIDTH, 4);
+  foreMatWood = new THREE.MeshBasicMaterial({ map: woodTex });
+  foreMatFlat = new THREE.MeshBasicMaterial({ color: 0xd9c8a1 });
+  fore = new THREE.Mesh(foreGeo, USE_WOOD ? foreMatWood : foreMatFlat);
+  fore.rotation.x = -Math.PI / 2;
+  fore.position.z = 2.0; // modest forward extension to hide green
+  scene.add(fore);
+  // Draw a white start/foul line across the lane
+  const startLineGeo = new THREE.PlaneGeometry(LANE_WIDTH, 0.06);
+  const startLineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const startLine = new THREE.Mesh(startLineGeo, startLineMat);
+  startLine.rotation.x = -Math.PI / 2;
+  startLine.position.set(0, 0.011, FOUL_Z);
+  scene.add(startLine);
   // Remove legacy brown side walls for cleaner visuals and performance
   // (Reverted) keep original simple ground; remove heavy lane decorations
   // Lightweight visual side walls (Plane + Basic material)
@@ -256,23 +367,20 @@ function init() {
   // X2 signage attached to transparent side walls (large)
   const x2tex = makeTextTexture('X2', { font: 'bold 200px Arial', color: '#ffffff', stroke: '#1a1a1a', strokeWidth: 12 });
   const plateGeo = new THREE.PlaneGeometry(4.0, 1.8);
-  const baseMat = new THREE.MeshBasicMaterial({ map: x2tex, transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-  // Create labels per side: front/middle/back × five vertical rows (from bottom to top)
+  const baseMat = new THREE.MeshBasicMaterial({ map: x2tex, transparent: false, depthTest: true, depthWrite: true, side: THREE.DoubleSide });
+  // Create labels per side: front/middle/back 횞 five vertical rows (from bottom to top)
   const fracs = [-0.35, 0.0, 0.35];
   const rows = 5;
   const yRows = Array.from({length: rows}, (_, i) => (-sideWallHeight * 0.5) + (i + 0.5) * (sideWallHeight / rows));
   plateLs = []; plateRs = [];
-  for (const f of fracs) {
-    for (const y of yRows) {
-      const mL = baseMat.clone(); const mR = baseMat.clone();
-      const pL = new THREE.Mesh(plateGeo, mL);
-      pL.position.set(f * wallLen, y, 0.06);
-      pL.renderOrder = 2; sideWallL.add(pL); plateLs.push(pL);
-      const pR = new THREE.Mesh(plateGeo, mR);
-      // right wall has opposite local X direction
-      pR.position.set(-f * wallLen, y, 0.06);
-      pR.renderOrder = 2; sideWallR.add(pR); plateRs.push(pR);
-    }
+  {
+    const mL = baseMat.clone(); const mR = baseMat.clone();
+    const pL = new THREE.Mesh(plateGeo, mL);
+    pL.position.set(0, sideWallHeight * 0.5 - 0.9, 0.06);
+    pL.renderOrder = 2; sideWallL.add(pL); plateLs.push(pL);
+    const pR = new THREE.Mesh(plateGeo, mR);
+    pR.position.set(0, sideWallHeight * 0.5 - 0.9, 0.06);
+    pR.renderOrder = 2; sideWallR.add(pR); plateRs.push(pR);
   }
   // Edge guides (thin bright rails at collision boundaries)
   const railGeo = new THREE.BoxGeometry(0.02, 0.02, LANE_LENGTH);
@@ -400,6 +508,8 @@ function init() {
     pinAimPoint.set(0, 1.0, headZ);
   };
   placePins();
+  // Create the ranking billboard at startup
+  createRankingBillboard();
   const resetBtn = document.getElementById('resetPinsBtn');
   if (resetBtn && resetBtn.remove) resetBtn.remove();
   // Hidden legacy target
@@ -410,8 +520,19 @@ function init() {
   // No decorative columns in bowling mode
 
   setupInput();
+  // Hide legacy HUD texts on the top-left and add refresh menu
+  const hud = document.getElementById('hud'); if (hud) hud.style.display = 'none';
+  (function createRefreshMenuUI(){
+    const wrap = document.createElement('div');
+    Object.assign(wrap.style, { position:'fixed', top:'8px', right:'8px', zIndex:7 });
+    const btn = document.createElement('button'); btn.textContent = '새로고침';
+    Object.assign(btn.style, { padding:'8px 12px', border:'none', borderRadius:'10px', background:'#2d6cdf', color:'#fff', fontWeight:'800', cursor:'pointer' });
+    
+    btn.onclick = ()=>{ paused = true; ensurePauseOverlay(); };
+    wrap.appendChild(btn); document.body.appendChild(wrap);
+  })();
   window.addEventListener('resize', resize); resize();
-  setStatus('엄지로 화면을 눌러 뒤로 당긴 후 놓아 발사');
+  setStatus('Ready: pull to launch');
   requestAnimationFrame(loop);
 }
 
@@ -444,7 +565,7 @@ let isDragging = false; let startPt = null; let curPt = null;
 function setupInput() {
   const el = renderer.domElement;
   const toPt = (e) => (e.touches && e.touches[0]) ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
-  const onDown = (e) => { e.preventDefault(); if (isDragging || roachActive) return; isDragging = true; startPt = toPt(e); curPt = { ...startPt }; drawAim(startPt, curPt); setStatus('좌우: 방향 / 길이: 파워'); };
+  const onDown = (e) => { e.preventDefault(); if (isDragging || roachActive) return; isDragging = true; startPt = toPt(e); curPt = { ...startPt }; drawAim(startPt, curPt); setStatus('Ready: pull to launch'); };
   const onMove = (e) => { if (!isDragging) return; curPt = toPt(e); drawAim(startPt, curPt); };
   const onUp = (e) => { if (!isDragging) return; isDragging = false; clearAim(); const endPt = toPt(e.changedTouches ? (e.changedTouches[0] || e.touches?.[0] || e) : e); shootFromDrag(startPt, endPt); startPt = null; curPt = null; };
   el.addEventListener('pointerdown', onDown, { passive: false });
@@ -469,11 +590,41 @@ function shootFromDrag(start, end) {
   updateWallMultiplierAll();
   roachVel.copy(dir).multiplyScalar(speed); roachActive = true;
   const lookAt = new THREE.Vector3().copy(roach.position).add(roachVel); roach.lookAt(lookAt);
-  setStatus('발사! 목표 링을 맞춰보세요');
+  setStatus('Ready: pull to launch');
 }
 
 function loop(t) {
   const dt = Math.min(0.033, (t - lastTime) / 1000); lastTime = t;
+  if (paused) { renderer.render(scene, camera); requestAnimationFrame(loop); return; }
+  // Floor LOD (disabled to keep floor color stable)
+  if (false) {
+    const dir = _tmpV1; camera.getWorldDirection(dir);
+    const useFlat = (dir.y < -0.22);
+    if (ground && ground.material !== (useFlat ? groundMatFlat : groundMatWood)) {
+      ground.material = useFlat ? groundMatFlat : groundMatWood;
+    }
+    if (fore && fore.material !== (useFlat ? foreMatFlat : foreMatWood)) {
+      fore.material = useFlat ? foreMatFlat : foreMatWood;
+    }
+  }
+  // Animate rainbow wall colors when enabled (X >= 1024)
+  if (wallRainbow) {
+    const baseHue = ((t * 0.10) % 360) / 360; // faster hue cycle
+    const sat = 1.0, light = 0.55;
+    if (sideWallMatL && sideWallMatL.color && sideWallMatL.color.setHSL) sideWallMatL.color.setHSL(baseHue, sat, light);
+    if (sideWallMatR && sideWallMatR.color && sideWallMatR.color.setHSL) sideWallMatR.color.setHSL((baseHue+0.08)%1, sat, light);
+    // also tint label plates dynamically to change text color
+    const applyRainbowToPlates = (arr, phaseOff=0)=>{
+      for (let i=0;i<arr.length;i++){
+        const m = arr[i].material; if (!m || !m.color || !m.transparent===undefined) continue;
+        const h = (baseHue + phaseOff + i*0.03) % 1;
+        m.color.setHSL(h, 0.95, 0.65);
+        m.transparent = true; m.opacity = 0.95;
+      }
+    };
+    if (plateLs && plateLs.length) applyRainbowToPlates(plateLs, 0.0);
+    if (plateRs && plateRs.length) applyRainbowToPlates(plateRs, 0.12);
+  }
   if (roachActive) {
     // Integrate motion
     roachVel.y -= g * dt; roach.position.addScaledVector(roachVel, dt);
@@ -556,8 +707,8 @@ function loop(t) {
       }
     }
     // (moved) Pin-pin collisions handled below every frame for continuous interaction
-    const minY = ROACH_RADIUS + 0.02; if (roach.position.y <= minY) { roach.position.y = minY; roachActive = false; setStatus('다시 당겨 발사'); }
-    const d = roach.position.distanceTo(target.position); if (d < TARGET_RADIUS + ROACH_RADIUS * 0.75) { flashTarget(); randomizeTarget(); resetRoach(); setStatus('명중! 다음 목표를 노려보세요'); }
+    const minY = ROACH_RADIUS + 0.02; if (roach.position.y <= minY) { roach.position.y = minY; roachActive = false; setStatus('Ready: pull to launch'); }
+    const d = roach.position.distanceTo(target.position); if (d < TARGET_RADIUS + ROACH_RADIUS * 0.75) { flashTarget(); randomizeTarget(); resetRoach(); setStatus('Ready: pull to launch'); }
   }
   if (!roachActive && prevActive && !resetTimer) {
     pendingFinalize = true;
@@ -570,7 +721,7 @@ function loop(t) {
   }
   // Pin-pin collisions: broadphase grid for performance + low iteration
   const CELL = 0.6;
-  for (let it=0; it<2; it++) {
+  for (let it=0; it<1; it++) {
     const grid = new Map();
     // build grid
     for (let i=0;i<pins.length;i++){
@@ -753,3 +904,7 @@ function finalizeThrow(){
 function flashTarget() { const orig = target.material.color.clone(); target.material.color.set(0xffe370); setTimeout(() => target.material.color.copy(orig), 150); }
 
 init();
+
+
+
+
