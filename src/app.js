@@ -230,6 +230,11 @@ function updateScoreUI(){
     // highlight current frame
     const isCurrent = (i === scoreState.frame - 1 && !scoreState.gameOver);
     cell.frame.style.outline = isCurrent ? '2px solid #82d14a' : 'none';
+    // 3rd frame special flair (always on)
+    if (i === 2) {
+      cell.frame.style.boxShadow = '0 0 0 2px rgba(251,191,36,0.9) inset, 0 0 24px rgba(251,191,36,0.7)';
+      cell.frame.style.background = 'linear-gradient(180deg, rgba(251,191,36,0.20), rgba(251,191,36,0.05))';
+    }
   }
 }
 
@@ -253,12 +258,13 @@ function labelColorForExp(exp){
 function updateWallMultiplierAll(){
   const hits = scoreState.wallHitsThisThrow || 0;
   const exp = Math.max(1, hits + 1);
-  const label = `X${Math.pow(2, exp)}`;
+  const mult = Math.max(1, hits + 1);
+  const label = `X${mult}`;
   const tex = makeTextTexture(label, { font: 'bold 220px Arial', color: '#ffffff', stroke: '#000000', strokeWidth: 18 });
   if (plateLs && plateLs.length) { for (const p of plateLs) { p.material.map = tex; p.material.needsUpdate = true; } }
   if (plateRs && plateRs.length) { for (const p of plateRs) { p.material.map = tex; p.material.needsUpdate = true; } }
   const color = labelColorForExp(exp);
-  const pow2 = Math.pow(2, exp);
+  const pow2 = Math.pow(2, exp); // legacy threshold logic retained
   wallRainbow = pow2 >= 1024;
   if (!wallRainbow) {
     if (sideWallMatL) sideWallMatL.color.setHex(color);
@@ -322,6 +328,7 @@ function init() {
   renderer.domElement.classList.add('webgl');
   document.body.appendChild(renderer.domElement);
   createScoreUI();
+  updateScoreUI();
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.7));
   const dir = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -554,34 +561,36 @@ function init() {
         scene.add(p); pins.push(p); created.push(p);
       }
     }
-    // Choose the most central pin (geometric center) as rainbow pin
-    if (created.length) {
-      let cx=0, cz=0; for (const p of created) { cx += p.position.x; cz += p.position.z; }
-      cx/=created.length; cz/=created.length;
-      let best=null, bd=Infinity;
-      for (const p of created){ const dx=p.position.x-cx, dz=p.position.z-cz; const d=dx*dx+dz*dz; if (d<bd){ bd=d; best=p; } }
-      if (best){ best.userData.rainbow = true; colorizePin(best, 0xff55aa); best.userData.isCenterRainbow=true; }
-    }
-    // Deterministic red pins: pick specific positions by row rules
-    const pickTargets = [
-      { row: 3, pos: 'center' },
-      { row: 5, pos: 'left' },
-      { row: 7, pos: 'right' },
-    ];
-    for (const rule of pickTargets){
-      const cand = created.filter(p=>p.userData.row===rule.row);
-      if (!cand.length) continue;
-      let chosen=null;
-      if (rule.pos==='center') {
-        // choose middle index
+    // Color rules: if frame 3 → 5 rainbow pins centered on middle column of rows 1..5; others red. Else legacy center+reds.
+    if (scoreState && scoreState.frame === 3) {
+      const rainbowSet = new Set();
+      for (let r=1; r<=5; r++){
+        const cand = created.filter(p=>p.userData.row===r);
+        if (!cand.length) continue;
         const mid = Math.floor(cand[0].userData.rowCount/2);
-        chosen = cand.find(p=>p.userData.colIndex===mid) || cand[Math.floor(cand.length/2)];
-      } else if (rule.pos==='left') {
-        chosen = cand.find(p=>p.userData.colIndex===0) || cand[0];
-      } else if (rule.pos==='right') {
-        chosen = cand.find(p=>p.userData.colIndex===cand[0].userData.rowCount-1) || cand[cand.length-1];
+        const chosen = cand.find(p=>p.userData.colIndex===mid) || cand[Math.floor(cand.length/2)];
+        if (chosen){ chosen.userData.rainbow = true; colorizePin(chosen, 0xff55aa); rainbowSet.add(chosen); }
       }
-      if (chosen && !chosen.userData.isCenterRainbow) { colorizePin(chosen, 0xd13d3d); chosen.userData.red = true; }
+      for (const p of created){ if (!rainbowSet.has(p)) { p.userData.red = true; colorizePin(p, 0xd13d3d); } }
+    } else {
+      // Legacy: pick center rainbow and 3 red by row rules
+      if (created.length) {
+        let cx=0, cz=0; for (const p of created) { cx += p.position.x; cz += p.position.z; }
+        cx/=created.length; cz/=created.length;
+        let best=null, bd=Infinity;
+        for (const p of created){ const dx=p.position.x-cx, dz=p.position.z-cz; const d=dx*dx+dz*dz; if (d<bd){ bd=d; best=p; } }
+        if (best){ best.userData.rainbow = true; colorizePin(best, 0xff55aa); best.userData.isCenterRainbow=true; }
+      }
+      const pickTargets = [ { row:3, pos:'center' }, { row:5, pos:'left' }, { row:7, pos:'right' } ];
+      for (const rule of pickTargets){
+        const cand = created.filter(p=>p.userData.row===rule.row);
+        if (!cand.length) continue;
+        let chosen=null;
+        if (rule.pos==='center') { const mid = Math.floor(cand[0].userData.rowCount/2); chosen = cand.find(p=>p.userData.colIndex===mid) || cand[Math.floor(cand.length/2)]; }
+        else if (rule.pos==='left') { chosen = cand.find(p=>p.userData.colIndex===0) || cand[0]; }
+        else if (rule.pos==='right') { chosen = cand.find(p=>p.userData.colIndex===cand[0].userData.rowCount-1) || cand[cand.length-1]; }
+        if (chosen && !chosen.userData.isCenterRainbow) { colorizePin(chosen, 0xd13d3d); chosen.userData.red = true; }
+      }
     }
     pinAimPoint.set(0, 1.0, headZ);
   };
@@ -1143,8 +1152,9 @@ function finalizeThrow(){
     }
   }
   const hits = scoreState.wallHitsThisThrow;
-  // Apply wall multiplier to baseSum
-  const points = baseSum * Math.pow(2, hits);
+  // Apply wall multiplier to baseSum (linear: *2, *3, *4 ...)
+  const mult = Math.max(1, hits + 1);
+  const points = baseSum * mult;
   const frame = scoreState.frames[fIdx];
   frame.throws[tIdx] = points; frame.pins[tIdx] = knocked; frame.wallHits[tIdx] = hits;
   // advance throw/frame
