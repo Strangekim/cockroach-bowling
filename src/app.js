@@ -1104,6 +1104,17 @@ init();
       const endpoint = url + '/rest/v1/scores?select=nickname,score&order=score.desc&limit=3';
       const r = await fetch(endpoint, { headers });
       const rows = await r.json();
+      // Truncate nickname to 4 characters with ellipsis for billboard
+      try {
+        if (Array.isArray(rows)) {
+          for (const it of rows) {
+            if (it && it.nickname) {
+              const gp = Array.from(String(it.nickname));
+              if (gp.length > 4) it.nickname = gp.slice(0,4).join('') + '…';
+            }
+          }
+        }
+      } catch {}
       // draw onto a canvas and set as texture
       const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 512;
       const ctx = canvas.getContext('2d');
