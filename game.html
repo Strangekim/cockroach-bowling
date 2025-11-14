@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>바퀴벌레 볼링</title>
+    <link rel="stylesheet" href="src/styles.css" />
+    <script src="/env.js"></script>
+  </head>
+  <body>
+    <div id="hud">
+      <div id="status">로딩 중...</div>
+      <div id="hint">화면을 끌어 조준, 손을 떼면 발사</div>
+    </div>
+    <canvas id="aim"></canvas>
+    <script>
+      if (window.THREE && !window.__THREE) window.__THREE = window.THREE;
+    </script>
+    <button id="resetPinsBtn" style="position:fixed; right:12px; top:12px; z-index:6; padding:8px 12px; border-radius:10px; border:none; background:#2d6cdf; color:#fff; font-weight:700;">핀 리셋</button>
+    <script type="module" src="src/app.js"></script>
+  </body>
+  </html>

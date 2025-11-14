@@ -377,7 +377,16 @@ function init() {
     // X2 signage attached to transparent side walls (more visible)
   const x2tex = makeTextTexture('X2', { font: 'bold 200px Arial', color: '#ffffff', stroke: '#1a1a1a', strokeWidth: 12 });
   const plateGeo = new THREE.PlaneGeometry(4.0, 1.8);
-  const baseMat = new THREE.MeshBasicMaterial({ map: x2tex, transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide });
+  // Performance: avoid costly blending overdraw on many plates.
+  // Use alphaTest to discard fully transparent texels, write depth, and render only front faces.
+  const baseMat = new THREE.MeshBasicMaterial({
+    map: x2tex,
+    transparent: false,
+    alphaTest: 0.5,
+    depthTest: true,
+    depthWrite: true,
+    side: THREE.FrontSide
+  });
   // 3 vertical rows × 5 positions along wall, both sides
   const fracs = [-0.45, -0.225, 0.0, 0.225, 0.45];
   const rows = 3;
@@ -1012,6 +1021,109 @@ init();
     }
   });
   try { obs.observe(document.body, { childList: true, characterData: true, subtree: true }); } catch {}
+})();
+
+// Enhance pause overlay to include "메뉴로 돌아가기"
+(function enhancePauseOverlay(){
+  if (typeof ensurePauseOverlay !== 'function') return;
+  const __orig = ensurePauseOverlay;
+  ensurePauseOverlay = function(){
+    __orig();
+    try {
+      if (!pauseOverlayEl) return;
+      // Fix labels if garbled
+      const title = pauseOverlayEl.querySelector('div');
+      if (title && /[�]/.test(title.textContent||'')) title.textContent = '일시 정지!';
+      // Add menu button if missing
+      const hasMenu = pauseOverlayEl.querySelector('#btnMenuBack');
+      if (!hasMenu){
+        const row = pauseOverlayEl.querySelector('div div, div > div');
+        const btn = document.createElement('button'); btn.id = 'btnMenuBack'; btn.textContent = '메뉴로 돌아가기';
+        Object.assign(btn.style, { padding:'10px 16px', borderRadius:'10px', border:'none', background:'#374151', color:'#fff', fontWeight:'800', cursor:'pointer' });
+        btn.onclick = ()=>{ location.href = 'index.html'; };
+        if (row && row.append) row.append(btn);
+      }
+    } catch {}
+  };
+})();
+
+// Override game over screen to support nickname save and menu back
+(function overrideGameOver(){
+  if (typeof showGameOver !== 'function') return;
+  const __orig = showGameOver;
+  showGameOver = function(){
+    __orig();
+    try {
+      if (!gameOverEl) return;
+      // Replace title/score labels
+      const nodes = Array.from(gameOverEl.children||[]);
+      if (nodes[0]) nodes[0].textContent = '게임 종료!';
+      if (nodes[1]) nodes[1].textContent = '총점: ' + scoreState.total;
+      // Insert form and buttons if not present
+      if (!gameOverEl.querySelector('#nicknameInput')){
+        const form = document.createElement('div'); Object.assign(form.style, { display:'flex', gap:'8px', alignItems:'center', marginTop:'4px' });
+        const input = document.createElement('input'); input.id='nicknameInput'; Object.assign(input, { placeholder:'닉네임(최대 20자)', maxLength:20 }); Object.assign(input.style, { padding:'8px 10px', borderRadius:'8px', border:'1px solid #374151', outline:'none' });
+        const btnSave = document.createElement('button'); btnSave.id='btnSaveScore'; btnSave.textContent = '점수 저장'; Object.assign(btnSave.style, { padding:'8px 12px', border:'none', borderRadius:'8px', background:'#16a34a', color:'#fff', fontWeight:'800', cursor:'pointer' });
+        form.append(input, btnSave);
+        const btnMenu = document.createElement('button'); btnMenu.textContent = '메뉴로 돌아가기'; Object.assign(btnMenu.style, { padding:'8px 12px', border:'none', borderRadius:'8px', background:'#374151', color:'#fff', fontWeight:'800', cursor:'pointer' });
+        btnMenu.onclick = ()=>{ location.href = 'index.html'; };
+        gameOverEl.appendChild(form);
+        gameOverEl.appendChild(btnMenu);
+        btnSave.onclick = async ()=>{
+          const nickname = String(input.value||'').trim();
+          if (!nickname) { alert('닉네임을 입력해주세요.'); input.focus(); return; }
+          if (nickname.length > 20) { alert('닉네임은 최대 20자입니다.'); return; }
+          const clean = nickname.replace(/[\u0000-\u001F\u007F]+/g, '').slice(0,20);
+          const ENV = (window.ENV||{}); const url = ENV.SUPABASE_URL; const key = ENV.SUPABASE_ANON_KEY;
+          if (!url || !key) { alert('환경변수(Supabase)가 설정되지 않았습니다.'); return; }
+          btnSave.disabled = true; btnSave.textContent = '저장 중...';
+          try {
+            const headers = { 'apikey': key, 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
+            const body = JSON.stringify({ nickname: clean, score: scoreState.total });
+            const r = await fetch(url + '/rest/v1/scores', { method:'POST', headers, body });
+            if (!r.ok) throw new Error('save failed');
+            btnSave.textContent = '저장 완료';
+          } catch(e) {
+            alert('저장에 실패했습니다. 나중에 다시 시도해주세요.');
+            btnSave.disabled = false; btnSave.textContent = '점수 저장';
+          }
+        };
+      }
+    } catch {}
+  };
+})();
+
+// Fetch Top3 for 3D ranking board after it appears
+(function update3DRankingBoard(){
+  const ENV = (window.ENV||{}); const url = ENV.SUPABASE_URL; const key = ENV.SUPABASE_ANON_KEY;
+  if (!url || !key) return;
+  async function tryUpdate(){
+    if (!rankingBoard || !rankingBoard.material) { requestAnimationFrame(tryUpdate); return; }
+    try {
+      const headers = { 'apikey': key, 'Authorization': 'Bearer ' + key };
+      const endpoint = url + '/rest/v1/scores?select=nickname,score&order=score.desc&limit=3';
+      const r = await fetch(endpoint, { headers });
+      const rows = await r.json();
+      // draw onto a canvas and set as texture
+      const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0f172a'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 12; ctx.strokeRect(6,6,canvas.width-12,canvas.height-12);
+      ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 72px system-ui, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
+      ctx.fillText('전체 랭킹 TOP3', canvas.width/2, 28);
+      ctx.font = 'bold 56px system-ui, sans-serif';
+      const startY = 140; const stepY = 110;
+      (rows||[]).forEach((r,i)=>{
+        const y = startY + i*stepY;
+        ctx.fillStyle = '#93c5fd'; ctx.textAlign='left'; ctx.fillText(String(i+1)+'등', 140, y);
+        ctx.fillStyle = '#e5e7eb'; ctx.fillText(r.nickname || '-', 300, y);
+        ctx.fillStyle = '#fbbf24'; ctx.textAlign='right'; ctx.fillText(String(r.score ?? '-'), canvas.width-140, y);
+      });
+      const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace; tex.needsUpdate = true; tex.minFilter = THREE.LinearFilter;
+      rankingBoard.material.map = tex; rankingBoard.material.needsUpdate = true;
+    } catch(e) {}
+  }
+  tryUpdate();
 })();
 
 
