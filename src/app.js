@@ -58,7 +58,13 @@ let camShakeT = 0; // remaining time (s)
 let camShakeAmp = 0; // base amplitude
 
 const g = 12;
-const ROACH_RADIUS = 0.30; // doubled roach size
+const ROACH_RADIUS = 0.30; // base roach radius
+let ROACH_RADIUS_CUR = ROACH_RADIUS; // current (affected by skill)
+let roachScale = 1; // current visual scale
+let skillUsedThisRound = false; // usable once per game (round)
+
+let skillActiveNow = false; // active until current throw starts/ends
+let skillBtn = null; // UI button
 const TARGET_RADIUS = 0.6; // legacy constant kept for compatibility
 const LANE_LENGTH = 26; // ~30% longer lane
 const LANE_WIDTH = 4.0; // widen lane ~2x from original
@@ -280,6 +286,7 @@ function showGameOver(){
 function resetGame(){
   scoreState.frame = 1; scoreState.throwInFrame = 1; scoreState.total = 0; scoreState.currentThrowId = 0; scoreState.wallHitsThisThrow = 0; scoreState.gameOver = false;
   scoreState.frames = Array.from({length:3}, ()=>({ throws:[0,0], pins:[0,0], wallHits:[0,0], score:0 }));
+  skillUsedThisRound = false; skillActiveNow = false; applyRoachScale(1); updateSkillUI();
   if (gameOverEl) { gameOverEl.remove(); gameOverEl = null; }
   updateScoreUI();
   placePins();
@@ -603,17 +610,57 @@ function init() {
   })();
   window.addEventListener('resize', resize); resize();
   setStatus('Ready: pull to launch');
+  createSkillUI();
   requestAnimationFrame(loop);
+}
+
+function applyRoachScale(s){
+  roachScale = s;
+  ROACH_RADIUS_CUR = ROACH_RADIUS * s;
+  if (roach && roach.scale) roach.scale.set(s, s, s);
+}
+
+function updateSkillUI(){
+  if (!skillBtn) return;
+  const canUse = (!roachActive) && (!skillUsedThisRound);
+  skillBtn.style.opacity = canUse ? '1' : '0.4';
+  skillBtn.disabled = !canUse;
+}
+
+function createSkillUI(){
+  const btn = document.createElement('button');
+  btn.id = 'btnSkillBigRoach';
+  btn.textContent = '2×';
+  Object.assign(btn.style, {
+    position:'fixed', left:'8px', top:'50%', transform:'translateY(-50%)',
+    zIndex:7, padding:'10px 12px', border:'none', borderRadius:'9999px',
+    background:'#f59e0b', color:'#111', fontWeight:'900', boxShadow:'0 6px 18px rgba(0,0,0,0.25)', cursor:'pointer'
+  });
+  btn.title = '바퀴벌레 2배 (라운드당 1회, 시작 전만 사용)';
+  btn.onclick = ()=>{
+    if (roachActive || skillUsedThisRound) return;
+    applyRoachScale(2);
+    skillActiveNow = true;
+    skillUsedThisRound = true;
+    updateSkillUI();
+  };
+  document.body.appendChild(btn);
+  skillBtn = btn;
+  updateSkillUI();
 }
 
 function resetRoach() {
   roachActive = false;
   roachVel.set(0, 0, 0);
-  roach.position.set(0, ROACH_RADIUS + 0.25, -0.4);
+  // reset skill effect after each throw
+  applyRoachScale(1);
+  skillActiveNow = false;
+  roach.position.set(0, ROACH_RADIUS_CUR + 0.25, -0.4);
   roach.rotation.set(0, 0, 0);
   // At the exact moment the roach returns to start, reset wall multipliers/colors to X2
   scoreState.wallHitsThisThrow = 0;
   updateWallMultiplierAll();
+  updateSkillUI();
 }
 function randomizeTarget() { const x = THREE.MathUtils.randFloatSpread(3.2); const z = -THREE.MathUtils.randFloat(14, 28); const y = THREE.MathUtils.randFloat(1.0, 2.0); target.position.set(x, y, z); }
 
@@ -652,13 +699,14 @@ function shootFromDrag(start, end) {
   const yaw = THREE.MathUtils.clamp(-pullX * 0.0038, -0.8, 0.8); const elev = THREE.MathUtils.clamp((-pullY) * 0.005, 0.08, 1.2);
   const dir = new THREE.Vector3(0, 0, -1); dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw); dir.applyAxisAngle(new THREE.Vector3(1, 0, 0), +elev); dir.normalize();
   // Bowling: always start from the tee position
-  roach.position.set(0, ROACH_RADIUS + 0.25, -0.4);
+  roach.position.set(0, ROACH_RADIUS_CUR + 0.25, -0.4);
   // Start scoring for this throw
   scoreState.currentThrowId++;
   scoreState.wallHitsThisThrow = 0;
   // Reset wall UI multipliers back to X2 for new throw
   updateWallMultiplierAll();
   roachVel.copy(dir).multiplyScalar(speed); roachActive = true;
+  updateSkillUI();
   // Apply initial spin based on drag direction/length
   roach.rotation.order = 'YXZ';
   const side = THREE.MathUtils.clamp(-(pullX) / maxLen, -1, 1);
@@ -777,8 +825,8 @@ function loop(t) {
       }
     }
     // Bowling: walls and pin collisions
-    if (roach.position.x < -LANE_HALF + ROACH_RADIUS) {
-      roach.position.x = -LANE_HALF + ROACH_RADIUS;
+    if (roach.position.x < -LANE_HALF + ROACH_RADIUS_CUR) {
+      roach.position.x = -LANE_HALF + ROACH_RADIUS_CUR;
       {
         const jitter = 1 + (Math.random() - 0.5) * 0.10; // ±5%
         roachVel.x *= -0.93 * jitter; // slightly stronger rebound
@@ -792,8 +840,8 @@ function loop(t) {
       camShakeT = Math.max(camShakeT, 0.12);
       camShakeAmp = Math.min(0.12, 0.02 + Math.abs(roachVel.x) * 0.01);
     }
-    if (roach.position.x >  LANE_HALF - ROACH_RADIUS) {
-      roach.position.x =  LANE_HALF - ROACH_RADIUS;
+    if (roach.position.x >  LANE_HALF - ROACH_RADIUS_CUR) {
+      roach.position.x =  LANE_HALF - ROACH_RADIUS_CUR;
       {
         const jitter = 1 + (Math.random() - 0.5) * 0.10; // ±5%
         roachVel.x *= -0.93 * jitter; // slightly stronger rebound
@@ -809,7 +857,7 @@ function loop(t) {
       const dx = roach.position.x - p.position.x;
       const dz = roach.position.z - p.position.z;
       const dist2 = dx*dx + dz*dz;
-      const pr = PIN_RADIUS + ROACH_RADIUS;
+      const pr = PIN_RADIUS + ROACH_RADIUS_CUR;
       const nearXZ = dist2 < pr*pr;
       // Allow slightly higher belly contacts to count
       const nearY = roach.position.y <= 0.85; // allow higher belly contacts
@@ -835,7 +883,7 @@ function loop(t) {
         // Resolve penetration: push roach out and reflect velocity
         const len = Math.max(1e-4, Math.sqrt(dist2));
         const nx = dx/len, nz = dz/len; // from pin to roach
-        const overlap = (PIN_RADIUS + ROACH_RADIUS) - len;
+        const overlap = (PIN_RADIUS + ROACH_RADIUS_CUR) - len;
         roach.position.x += nx * overlap;
         roach.position.z += nz * overlap;
         const vdotn = roachVel.x*nx + roachVel.z*nz;
@@ -860,8 +908,8 @@ function loop(t) {
       }
     }
     // (moved) Pin-pin collisions handled below every frame for continuous interaction
-    const minY = ROACH_RADIUS + 0.02; if (roach.position.y <= minY) { roach.position.y = minY; roachActive = false; setStatus('Ready: pull to launch'); }
-    const d = roach.position.distanceTo(target.position); if (d < TARGET_RADIUS + ROACH_RADIUS * 0.75) { flashTarget(); randomizeTarget(); resetRoach(); setStatus('Ready: pull to launch'); }
+    const minY = ROACH_RADIUS_CUR + 0.02; if (roach.position.y <= minY) { roach.position.y = minY; roachActive = false; setStatus('Ready: pull to launch'); }
+    const d = roach.position.distanceTo(target.position); if (d < TARGET_RADIUS + ROACH_RADIUS_CUR * 0.75) { flashTarget(); randomizeTarget(); resetRoach(); setStatus('Ready: pull to launch'); }
   }
   // Apply camera shake to camera target/position
   const camTarget = _tmpV1; const camPos = _tmpV2;
@@ -1063,6 +1111,7 @@ function finalizeThrow(){
     frame.score = (frame.throws[0]||0) + (frame.throws[1]||0);
     scoreState.total += frame.score;
     scoreState.throwInFrame = 1; scoreState.frame++;
+    // Skill remains used for the entire game (no reset here)
     pendingPinsReset = true; // defer pin reset until roach resets to origin
     if (scoreState.frame > 3) { updateScoreUI(); showGameOver(); return; }
   }
@@ -1236,6 +1285,11 @@ init();
   }
   tryUpdate();
 })();
+
+
+
+
+
 
 
 
