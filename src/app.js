@@ -636,9 +636,10 @@ function createSkillUI(){
   btn.id = 'btnSkillBigRoach';
   btn.textContent = '2×';
   Object.assign(btn.style, {
-    position:'fixed', left:'8px', top:'50%', transform:'translateY(-50%)',
-    zIndex:7, padding:'10px 12px', border:'none', borderRadius:'9999px',
-    background:'#f59e0b', color:'#111', fontWeight:'900', boxShadow:'0 6px 18px rgba(0,0,0,0.25)', cursor:'pointer'
+    position:'fixed', left:'10px', top:'50%', transform:'translateY(-50%)',
+    zIndex:7, width:'120px', height:'120px', border:'none', borderRadius:'9999px',
+    background:'linear-gradient(180deg,#fbbf24 0%, #f59e0b 70%, #d97706 100%)', color:'#111', fontWeight:'900', boxShadow:'0 14px 30px rgba(0,0,0,0.35)', cursor:'pointer',
+    fontSize:'32px', letterSpacing:'1px'
   });
   btn.title = '바퀴벌레 2배 (라운드당 1회, 시작 전만 사용)';
   btn.onclick = ()=>{
@@ -655,7 +656,7 @@ function createSkillUI(){
 
 function updateMidSkillUI(){
   if (!midSkillBtn) return;
-  midSkillBtn.style.display = (roachActive && !sonicUsedThisThrow) ? '' : 'none';
+  midSkillBtn.style.display = roachActive ? '' : 'none';
 }
 
 function createMidflightSkillUI(){
@@ -663,10 +664,10 @@ function createMidflightSkillUI(){
   btn.id = 'btnSkillSpin';
   // Big circular button with rotating SVG icon
   Object.assign(btn.style, {
-    position:'fixed', left:'50%', bottom:'18px', transform:'translateX(-50%)',
-    zIndex:7, width:'88px', height:'88px', border:'none', borderRadius:'9999px',
-    background:'linear-gradient(180deg,#34d399,#22c55e)', color:'#0b1220', fontWeight:'900', boxShadow:'0 10px 26px rgba(0,0,0,0.35)', cursor:'pointer',
-    display:'none'
+    position:'fixed', left:'50%', bottom:'26px', transform:'translateX(-50%)',
+    zIndex:7, width:'140px', height:'140px', border:'none', borderRadius:'9999px',
+    background:'linear-gradient(180deg,#fde047 0%, #fbbf24 55%, #f59e0b 100%)', color:'#111827', fontWeight:'900', boxShadow:'0 16px 36px rgba(0,0,0,0.36)', cursor:'pointer',
+    display:'none', letterSpacing:'2px', fontSize:'28px'
   });
   btn.setAttribute('aria-label','스핀 가속');
   // Inject spin keyframes once
@@ -675,17 +676,12 @@ function createMidflightSkillUI(){
     st.textContent = '@keyframes spin360{to{transform:rotate(360deg)}}';
     document.head.appendChild(st);
   }
-  btn.innerHTML = '<svg viewBox="0 0 64 64" width="44" height="44" style="display:block; margin:22px auto; animation:spin360 0.8s linear infinite">'+
-    '<circle cx="32" cy="32" r="22" stroke="#0b1220" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.25"/>'+
-    '<path d="M32 10 A22 22 0 0 1 54 32" stroke="#0b1220" stroke-width="6" fill="none" stroke-linecap="round"/>'+
-  '</svg>';
+  btn.innerHTML = 'SPIN';
   btn.title = '비행 중 전방 스핀 가속 (투구당 1회)';
   btn.onclick = ()=>{
-    if (!roachActive || sonicUsedThisThrow) return;
-    sonicUsedThisThrow = true;
-    sonicSpinT = 1.2; // longer, stronger spin
-    roachAngVel.x += 60.0; // immediate kick for visual clarity
-    roachAngVel.z += 40.0;
+    if (!roachActive) return;
+    sonicSpinT = Math.min(sonicSpinT + 0.6, 2.4);
+    roachAngVel.x += 90.0; roachAngVel.z += 60.0; roachAngVel.y += 30.0;
     updateMidSkillUI();
   };
   document.body.appendChild(btn);
