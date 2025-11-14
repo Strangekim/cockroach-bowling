@@ -35,6 +35,7 @@ let sideWallMatL = null, sideWallMatR = null;
 let plateLs = [], plateRs = [];
 let wallRainbow = false; // rainbow effect flag when X >= 1024
 let rankingBoard = null; // 3D billboard mesh
+let rankingTop3Cache = null; // cache fetched Top3 to keep across rounds
 // Lane floor refs for LOD switching
 let ground = null, fore = null;
 let groundMatWood = null, groundMatFlat = null;
@@ -62,7 +63,7 @@ const TARGET_RADIUS = 0.6; // legacy constant kept for compatibility
 const LANE_LENGTH = 26; // ~30% longer lane
 const LANE_WIDTH = 4.0; // widen lane ~2x from original
 const LANE_HALF = LANE_WIDTH * 0.5;
-const PIN_RADIUS = 0.12;
+const PIN_RADIUS = 0.24;
 const LANE_GUTTER_W = 0.3; // gutter width on each side
 const FOUL_Z = -0.8; // approximate foul line z
 // Mass tuning (relative units)
@@ -130,23 +131,23 @@ function createRankingBillboard(){
   ctx.fillStyle = '#0f172a'; ctx.fillRect(0,0,canvas.width,canvas.height);
   ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 12; ctx.strokeRect(6,6,canvas.width-12,canvas.height-12);
   ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 72px system-ui, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
-  ctx.fillText('\uC804\uCCB4 \uB7AD\uD0B9', canvas.width/2, 28);
-  const rows = [
-    { rank: '1\uB4F1', name: 'yhk', score: '15000' },
-    { rank: '2\uB4F1', name: 'yhk', score: '10000' },
-    { rank: '3\uB4F1', name: 'yhk', score: '5000' },
-  ];
+  ctx.fillText('전체 랭킹 TOP3', canvas.width/2, 28);
   ctx.font = 'bold 56px system-ui, sans-serif';
   const startY = 140; const stepY = 110;
-  rows.forEach((r,i)=>{
-    const y = startY + i*stepY;
-    ctx.fillStyle = '#93c5fd'; ctx.textAlign='left'; ctx.fillText(r.rank, 140, y);
-    ctx.fillStyle = '#e5e7eb'; ctx.fillText(r.name, 300, y);
-    ctx.fillStyle = '#fbbf24'; ctx.textAlign='right'; ctx.fillText(r.score, canvas.width-140, y);
-  });
+  // If we already fetched Top3, draw from cache
+  if (Array.isArray(rankingTop3Cache) && rankingTop3Cache.length) {
+    rankingTop3Cache.forEach((r,i)=>{
+      const y = startY + i*stepY;
+      ctx.fillStyle = '#93c5fd'; ctx.textAlign='left'; ctx.fillText(String(i+1)+'등', 140, y);
+      let nick = (r && r.nickname) ? String(r.nickname) : '-';
+      const gp = Array.from(nick); if (gp.length > 4) nick = gp.slice(0,4).join('') + '...';
+      ctx.fillStyle = '#e5e7eb'; ctx.fillText(nick, 300, y);
+      ctx.fillStyle = '#fbbf24'; ctx.textAlign='right'; ctx.fillText(String(r.score ?? '-'), canvas.width-140, y);
+    });
+  }
   const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace; tex.needsUpdate = true; tex.minFilter = THREE.LinearFilter;
   const geo = new THREE.PlaneGeometry(bw, bh);
-  const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+  const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide });
   const board = new THREE.Mesh(geo, mat);
   board.position.set(0, 5.0, -LANE_LENGTH + 1.0);
   scene.add(board);
@@ -491,26 +492,40 @@ function init() {
   const pinBandMat = new THREE.MeshStandardMaterial({ color: 0xd13d3d, roughness: 0.6, metalness: 0.0 });
   function makePin() {
     const g = new THREE.Group();
-    const base = new THREE.CylinderGeometry(0.12, 0.11, 0.35, 12);
-    const neck = new THREE.CylinderGeometry(0.09, 0.08, 0.18, 12);
-    const head = new THREE.SphereGeometry(0.08, 12, 10);
-    const meshBase = new THREE.Mesh(base, pinMat); meshBase.position.y = 0.175; g.add(meshBase);
-    const meshNeck = new THREE.Mesh(neck, pinMat); meshNeck.position.y = 0.175 + 0.09 + 0.09; g.add(meshNeck);
-    const meshHead = new THREE.Mesh(head, pinMat); meshHead.position.y = 0.175 + 0.09 + 0.18 + 0.08; g.add(meshHead);
-    const band = new THREE.CylinderGeometry(0.095, 0.095, 0.025, 14);
-    const bandMesh = new THREE.Mesh(band, pinBandMat); bandMesh.position.y = 0.175 + 0.05; g.add(bandMesh);
+    // Scaled x2 in all dimensions
+    const base = new THREE.CylinderGeometry(0.24, 0.22, 0.70, 12);
+    const neck = new THREE.CylinderGeometry(0.18, 0.16, 0.36, 12);
+    const head = new THREE.SphereGeometry(0.16, 12, 10);
+    const meshBase = new THREE.Mesh(base, pinMat); meshBase.position.y = 0.35; g.add(meshBase);
+    const meshNeck = new THREE.Mesh(neck, pinMat); meshNeck.position.y = 0.35 + 0.18 + 0.18; g.add(meshNeck);
+    const meshHead = new THREE.Mesh(head, pinMat); meshHead.position.y = 0.35 + 0.18 + 0.36 + 0.16; g.add(meshHead);
+    const band = new THREE.CylinderGeometry(0.19, 0.19, 0.05, 14);
+    const bandMesh = new THREE.Mesh(band, pinBandMat); bandMesh.position.y = 0.35 + 0.10; g.add(bandMesh);
     g.userData.alive = true;
     g.userData.vel = new THREE.Vector3(0, 0, 0); // Add velocity for pin-pin collisions
+    g.userData.meshes = { base: meshBase, neck: meshNeck, head: meshHead, band: bandMesh };
     return g;
+  }
+  function colorizePin(pin, colorHex){
+    if (!pin || !pin.userData || !pin.userData.meshes) return;
+    const { base, neck, head } = pin.userData.meshes;
+    for (const m of [base, neck, head]){
+      if (!m) continue;
+      m.material = (m.material || pinMat).clone();
+      m.material.color.setHex(colorHex);
+      m.material.needsUpdate = true;
+    }
   }
   _placePinsImpl = function(){
     for (const p of pins) scene.remove(p);
     pins = [];
-    // Bowling triangle: 45 pins with 9 rows [1..9], placed further back
+    // Bowling triangle: reduced ~half count (~28 pins) with 7 rows [1..7]
     const headZ = -LANE_LENGTH * 0.70; // move cluster further back down the lane
-    const rowSpacing = 0.42;
-    const colSpacing = 0.40;
-    const rows = [1,2,3,4,5,6,7,8,9];
+    const rowSpacing = 0.84; // doubled spacing for doubled pin size
+    const colSpacing = 0.80; // doubled spacing for doubled pin size
+    const rows = [1,2,3,4,5,6,7];
+    // track row/column metadata for deterministic color rules
+    const created = [];
     for (let r=0; r<rows.length; r++){
       const count = rows[r];
       const z = headZ - r * rowSpacing;
@@ -521,10 +536,42 @@ function init() {
         p.rotation.set(0,0,0);
         p.userData.alive = true;
         p.userData.vel.set(0, 0, 0);
+        p.userData.row = r+1; // 1-based row index
+        p.userData.rowCount = count;
+        p.userData.colIndex = i; // 0..count-1
         delete p.userData.tip;
         delete p.userData.knockedThrowId;
-        scene.add(p); pins.push(p);
+        scene.add(p); pins.push(p); created.push(p);
       }
+    }
+    // Choose the most central pin (geometric center) as rainbow pin
+    if (created.length) {
+      let cx=0, cz=0; for (const p of created) { cx += p.position.x; cz += p.position.z; }
+      cx/=created.length; cz/=created.length;
+      let best=null, bd=Infinity;
+      for (const p of created){ const dx=p.position.x-cx, dz=p.position.z-cz; const d=dx*dx+dz*dz; if (d<bd){ bd=d; best=p; } }
+      if (best){ best.userData.rainbow = true; colorizePin(best, 0xff55aa); best.userData.isCenterRainbow=true; }
+    }
+    // Deterministic red pins: pick specific positions by row rules
+    const pickTargets = [
+      { row: 3, pos: 'center' },
+      { row: 5, pos: 'left' },
+      { row: 7, pos: 'right' },
+    ];
+    for (const rule of pickTargets){
+      const cand = created.filter(p=>p.userData.row===rule.row);
+      if (!cand.length) continue;
+      let chosen=null;
+      if (rule.pos==='center') {
+        // choose middle index
+        const mid = Math.floor(cand[0].userData.rowCount/2);
+        chosen = cand.find(p=>p.userData.colIndex===mid) || cand[Math.floor(cand.length/2)];
+      } else if (rule.pos==='left') {
+        chosen = cand.find(p=>p.userData.colIndex===0) || cand[0];
+      } else if (rule.pos==='right') {
+        chosen = cand.find(p=>p.userData.colIndex===cand[0].userData.rowCount-1) || cand[cand.length-1];
+      }
+      if (chosen && !chosen.userData.isCenterRainbow) { colorizePin(chosen, 0xd13d3d); chosen.userData.red = true; }
     }
     pinAimPoint.set(0, 1.0, headZ);
   };
@@ -658,6 +705,34 @@ function loop(t) {
     if (plateLs && plateLs.length) applyRainbowToPlates(plateLs, 0.0);
     if (plateRs && plateRs.length) applyRainbowToPlates(plateRs, 0.12);
   }
+  // Animate rainbow pin color if present (body + band + emissive)
+  if (pins && pins.length) {
+    const hue = ((t * 0.15) % 360) / 360;
+    for (const p of pins) {
+      if (!p || !p.userData || !p.userData.rainbow || !p.userData.meshes) continue;
+      const { base, neck, head, band } = p.userData.meshes;
+      const parts = [base, neck, head];
+      for (const m of parts){
+        if (m && m.material && m.material.color && m.material.color.setHSL) {
+          m.material.color.setHSL(hue, 0.9, 0.6);
+          if (m.material.emissive) {
+            const l = wallRainbow ? 0.8 : 0.25;
+            const tc = new THREE.Color(); tc.setHSL(hue, 1.0, 0.5);
+            m.material.emissive.copy(tc); m.material.emissiveIntensity = l;
+          }
+        }
+      }
+      if (band && band.material && band.material.color && band.material.color.setHSL) {
+        const bh = (hue + 0.33) % 1;
+        band.material.color.setHSL(bh, 0.95, 0.55);
+        if (band.material.emissive) {
+          const l2 = wallRainbow ? 1.0 : 0.35;
+          const tc2 = new THREE.Color(); tc2.setHSL(bh, 1.0, 0.6);
+          band.material.emissive.copy(tc2); band.material.emissiveIntensity = l2;
+        }
+      }
+    }
+  }
   if (roachActive) {
     // Integrate motion
     roachVel.y -= g * dt; roach.position.addScaledVector(roachVel, dt);
@@ -703,7 +778,14 @@ function loop(t) {
     }
     // Bowling: walls and pin collisions
     if (roach.position.x < -LANE_HALF + ROACH_RADIUS) {
-      roach.position.x = -LANE_HALF + ROACH_RADIUS; roachVel.x *= -0.85; scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
+      roach.position.x = -LANE_HALF + ROACH_RADIUS;
+      {
+        const jitter = 1 + (Math.random() - 0.5) * 0.10; // ±5%
+        roachVel.x *= -0.93 * jitter; // slightly stronger rebound
+        // small lateral/z nudge for variety
+        roachVel.z += (Math.random() - 0.5) * 0.15;
+      }
+      scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
       // add torque + camera shake on wall hit for more spin feel
       roachAngVel.y += 1.5 * Math.sign(roachVel.x);
       roachAngVel.z += 0.8 * Math.sign(roachVel.x);
@@ -711,7 +793,13 @@ function loop(t) {
       camShakeAmp = Math.min(0.12, 0.02 + Math.abs(roachVel.x) * 0.01);
     }
     if (roach.position.x >  LANE_HALF - ROACH_RADIUS) {
-      roach.position.x =  LANE_HALF - ROACH_RADIUS; roachVel.x *= -0.85; scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
+      roach.position.x =  LANE_HALF - ROACH_RADIUS;
+      {
+        const jitter = 1 + (Math.random() - 0.5) * 0.10; // ±5%
+        roachVel.x *= -0.93 * jitter; // slightly stronger rebound
+        roachVel.z += (Math.random() - 0.5) * 0.15;
+      }
+      scoreState.wallHitsThisThrow++; updateWallMultiplierAll();
       roachAngVel.y += 1.5 * Math.sign(roachVel.x);
       roachAngVel.z += 0.8 * Math.sign(roachVel.x);
       camShakeT = Math.max(camShakeT, 0.12);
@@ -751,7 +839,7 @@ function loop(t) {
         roach.position.x += nx * overlap;
         roach.position.z += nz * overlap;
         const vdotn = roachVel.x*nx + roachVel.z*nz;
-        const e = 0.6;
+        const e = 0.7 + (Math.random()-0.5)*0.16; // 0.62..0.78
         roachVel.x = roachVel.x - (1+e)*vdotn*nx;
         roachVel.z = roachVel.z - (1+e)*vdotn*nz;
         // Transfer momentum to pin (use tuned masses)
@@ -763,7 +851,7 @@ function loop(t) {
         // Add a bit of tangential shove to encourage tipping
         const vtx = roachVel.x - vdotn * nx;
         const vtz = roachVel.z - vdotn * nz;
-        const tangentialKick = 0.28 * bellyFactor2 * massRatio;
+        const tangentialKick = (0.34 + (Math.random()-0.5)*0.10) * bellyFactor2 * massRatio;
         // camera shake intensity based on impact strength
         camShakeT = Math.max(camShakeT, 0.15);
         camShakeAmp = Math.min(0.14, 0.02 + Math.abs(vdotn) * 0.02);
@@ -846,7 +934,7 @@ function loop(t) {
               const relVelZ = b.userData.vel.z - a.userData.vel.z;
               const relVelDotN = relVelX * nx + relVelZ * nz;
               if (relVelDotN < 0) { // approaching
-                const e = 0.5; // restitution
+              const e = 0.6 + (Math.random()-0.5)*0.10; // restitution with slight randomness
                 const m1 = PIN_MASS, m2 = PIN_MASS;
                 const jimp = -(1 + e) * relVelDotN / (1/m1 + 1/m2);
                 a.userData.vel.x -= (jimp * nx) / m1;
@@ -954,9 +1042,19 @@ function finalizeThrow(){
   const fIdx = scoreState.frame - 1; const tIdx = scoreState.throwInFrame - 1;
   // count pins knocked this throw
   let knocked = 0;
-  for (const p of pins) { if (p.userData.knockedThrowId === scoreState.currentThrowId) knocked++; }
+  let baseSum = 0;
+  for (const p of pins) {
+    if (p.userData.knockedThrowId === scoreState.currentThrowId) {
+      knocked++;
+      let b = 1;
+      if (p.userData.red) b = 5;
+      if (p.userData.rainbow) b = 50;
+      baseSum += b;
+    }
+  }
   const hits = scoreState.wallHitsThisThrow;
-  const points = knocked * Math.pow(2, hits);
+  // Apply wall multiplier to baseSum
+  const points = baseSum * Math.pow(2, hits);
   const frame = scoreState.frames[fIdx];
   frame.throws[tIdx] = points; frame.pins[tIdx] = knocked; frame.wallHits[tIdx] = hits;
   // advance throw/frame
@@ -1104,13 +1202,15 @@ init();
       const endpoint = url + '/rest/v1/scores?select=nickname,score&order=score.desc&limit=3';
       const r = await fetch(endpoint, { headers });
       const rows = await r.json();
+      // cache Top3 for later use across rounds
+      try { rankingTop3Cache = Array.isArray(rows) ? rows.slice(0,3).map(it=>({ ...it })) : []; } catch {}
       // Truncate nickname to 4 characters with ellipsis for billboard
       try {
         if (Array.isArray(rows)) {
           for (const it of rows) {
             if (it && it.nickname) {
               const gp = Array.from(String(it.nickname));
-              if (gp.length > 4) it.nickname = gp.slice(0,4).join('') + '…';
+              if (gp.length > 4) it.nickname = gp.slice(0,4).join('') + '...';
             }
           }
         }

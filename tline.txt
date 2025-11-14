@@ -1,0 +1,1 @@
+﻿  ctx.font = 'bold 56px system-ui, sans-serif';
