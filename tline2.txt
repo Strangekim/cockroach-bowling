@@ -1,1 +1,0 @@
-﻿  ctx.fillText('전체 랭킹 TOP3', canvas.width/2, 28);

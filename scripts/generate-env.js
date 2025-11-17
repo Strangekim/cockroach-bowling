@@ -5,6 +5,7 @@
 */
 
 const fs = require('fs');
+const path = require('path');
 
 const { SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
 
@@ -16,8 +17,13 @@ const payload = {
 const body = 'window.ENV = ' + JSON.stringify(payload) + ';// generated\n';
 
 try {
-  fs.writeFileSync('env.js', body, 'utf8');
-  console.log('[generate-env] Wrote env.js with keys:', Object.keys(payload));
+  const publicDir = path.join(process.cwd(), 'public');
+  if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+  }
+  const outPath = path.join(publicDir, 'env.js');
+  fs.writeFileSync(outPath, body, 'utf8');
+  console.log('[generate-env] Wrote env.js to', outPath, 'with keys:', Object.keys(payload));
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     console.warn('[generate-env] WARNING: Missing SUPABASE_URL or SUPABASE_ANON_KEY in environment.');
   }

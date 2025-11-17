@@ -1,1 +1,0 @@
-﻿              if (gp.length > 4) it.nickname = gp.slice(0,4).join('') + '…';
