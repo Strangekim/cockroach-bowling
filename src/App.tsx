@@ -14,6 +14,7 @@ export const App: React.FC = () => {
         <div className="page">
           <div className="title-bg"></div>
           <div className="title-container">
+            <h1 className="title">바퀴벌레 볼링</h1>
             <TitlePage onStart={() => setView('game')} />
             <Leaderboard />
           </div>
