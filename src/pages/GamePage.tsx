@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BGM } from '../components/BGM';
 
 export const GamePage: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -30,7 +29,6 @@ export const GamePage: React.FC = () => {
           }}
         />
       </div>
-      <BGM isGameEnd={isGameEnd} />
     </div>
   );
 };
