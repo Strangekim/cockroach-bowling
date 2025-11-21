@@ -2,12 +2,11 @@ html,
 body,
 #root {
   width: 100dvw;
-  height: 100dvh;
+  min-height: 100dvh;
   margin: 0;
   padding: 0;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
     'Noto Sans KR', 'Malgun Gothic', sans-serif;
-  overflow: hidden;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: pan-x pan-y;
@@ -99,3 +98,21 @@ body,
   background-color: #020617;
 }
 
+@media (max-width: 768px) {
+  html,
+  body,
+  #root {
+    min-height: 100dvh;
+    height: auto;
+    overflow-y: auto;
+  }
+
+  .page {
+    justify-content: flex-start;
+    padding: 16px 0 24px;
+  }
+
+  .title-container {
+    margin-top: 16px;
+  }
+}
